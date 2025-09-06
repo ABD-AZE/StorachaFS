@@ -1,59 +1,58 @@
-package cmd
+package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
 	"os"
+	"time"
+
+	"github.com/ABD-AZE/StorachaFS/internal/fuse"
+	"github.com/hanwen/go-fuse/v2/fs"
+	fusefs "github.com/hanwen/go-fuse/v2/fuse"
 )
-
-const version = "0.0.1"
-
+// run eg: `./main QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG /tmp/storacha` after buidling with `go build -o main cmd/main.go`
 func main() {
-	if len(os.Args) < 2 {
-		printHelp()
-		return
+	log.SetFlags(0)
+	if len(os.Args) < 3 {
+		usage()
+	}
+	mountCmd(os.Args[1:])
+}
+
+func usage() {
+	fmt.Fprintf(os.Stderr, `Usage:
+  storachafs <CID> <mountpoint>
+`)
+	os.Exit(2)
+}
+
+func mountCmd(args []string) {
+	fsFlags := flag.NewFlagSet("mount", flag.ExitOnError)
+	entryTTL := fsFlags.Duration("entry-ttl", time.Second, "kernel dentry TTL")
+	attrTTL := fsFlags.Duration("attr-ttl", time.Second, "kernel attr TTL")
+	debug := fsFlags.Bool("debug", false, "enable debug logging")
+	_ = fsFlags.Parse(args)
+	if fsFlags.NArg() != 2 {
+		usage()
+	}
+	cid := fsFlags.Arg(0)
+	mnt := fsFlags.Arg(1)
+
+	root := fuse.NewStorachaFS(cid, *debug)
+	opts := &fs.Options{
+		MountOptions: fusefs.MountOptions{
+			FsName: fmt.Sprintf("storachafs-%s", cid),
+			Name:   "storachafs",
+		},
+		EntryTimeout: entryTTL,
+		AttrTimeout:  attrTTL,
 	}
 
-	switch os.Args[1] {
-	case "mount":
-		handleMount()
-	case "status":
-		handleStatus()
-	case "sync":
-		handleSync()
-	case "pull":
-		handlePull()
-	case "--version", "-v":
-		fmt.Println("StorachaFS version:", version)
-	default:
-		fmt.Println("Unknown command:", os.Args[1])
-		printHelp()
+	server, err := fs.Mount(mnt, root, opts)
+	if err != nil {
+		log.Fatalf("mount: %v", err)
 	}
-}
-
-func printHelp() {
-	fmt.Println("StorachaFS CLI")
-	fmt.Println("Usage: storachafs <command>")
-	fmt.Println("Commands:")
-	fmt.Println("  mount   Mount a Storacha space at a local directory")
-	fmt.Println("  status  Show local vs remote changes")
-	fmt.Println("  sync    Sync local files to Storacha")
-	fmt.Println("  pull    Fetch new or updated files from Storacha")
-	fmt.Println("Options:")
-	fmt.Println("  -v, --version   Show version")
-}
-
-func handleMount() {
-	fmt.Println("[stub] Mounting Storacha space... (to be implemented)")
-}
-
-func handleStatus() {
-	fmt.Println("[stub] Checking sync status... (to be implemented)")
-}
-
-func handleSync() {
-	fmt.Println("[stub] Syncing local files to Storacha... (to be implemented)")
-}
-
-func handlePull() {
-	fmt.Println("[stub] Pulling new/updated files from Storacha... (to be implemented)")
+	log.Printf("mounted %s at %s", cid, mnt)
+	server.Wait()
 }
