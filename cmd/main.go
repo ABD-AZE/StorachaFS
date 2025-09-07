@@ -11,7 +11,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	fusefs "github.com/hanwen/go-fuse/v2/fuse"
 )
-// run eg: `./main QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG /tmp/storacha` after buidling with `go build -o main cmd/main.go`
+// run eg: `./main QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG /tmp/storacha` after building with `go build -o main cmd/main.go`
 func main() {
 	log.SetFlags(0)
 	if len(os.Args) < 3 {
