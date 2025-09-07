@@ -14,6 +14,7 @@ import (
 	fusefs "github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/storacha/guppy/pkg/client"
 )
+ // run eg: `./main QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG /tmp/storacha` after building with `go build -o main cmd/main.go`
 
 func main() {
 	log.SetFlags(0)
