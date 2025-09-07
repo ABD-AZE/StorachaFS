@@ -3,10 +3,9 @@ package auth
 import (
 	"context"
 	"fmt"
-	"errors"
-
-	uploadcap "github.com/storacha/go-libstoracha/capabilities/upload"
+	"strings"
 	"github.com/storacha/go-ucanto/core/result"
+	"github.com/storacha/go-ucanto/did"
 	"github.com/storacha/guppy/pkg/client"
 )
 
@@ -15,7 +14,7 @@ func EmailAuth(email string) (*client.Client, error) {
 	if _, ok := cachedClients[email]; ok {
 		return cachedClients[email], nil
 	}
-	cachedClients[email] = emailAuth(email)
+	cachedClients[email], _ = emailAuth(email)
 	return cachedClients[email], nil
 }
 
@@ -46,7 +45,9 @@ func emailAuth(email string) (*client.Client, error) {
 		return nil, err
 	}
 
-	c.AddProofs(proofs...)
+	if err := c.AddProofs(proofs...); err != nil {
+		return nil, fmt.Errorf("failed to add proofs: %w", err)
+	}
 
 	return c, nil
 }

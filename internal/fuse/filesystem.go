@@ -16,7 +16,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-    "github.com/storacha/guppy/pkg/client"
 )
 
 // ---------- Storacha client abstraction ----------
@@ -65,7 +64,11 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Failed to close response body: %v", err)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -151,7 +154,9 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 			resp, err := http.Head(url)
 			if err == nil {
 				size = uint64(resp.ContentLength)
-				resp.Body.Close()
+				if err := resp.Body.Close(); err != nil {
+					log.Printf("Failed to close response body: %v", err)
+				}
 			}
 		}
 
@@ -183,7 +188,11 @@ func (c *storachaClient) OpenReader(cid, p string) (io.ReadSeeker, uint64, error
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("Failed to close response body: %v", err)
+		}
+	}()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -373,68 +382,68 @@ func (h *fileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.Rea
 	return fuse.ReadResultData(dest[:n]), 0
 }
 
-// -------------------- write methods --------------------
+// // -------------------- write methods --------------------
 
-// For file creation and modification
-var _ = (fs.NodeCreater)((*StorachaDir)(nil))
-var _ = (fs.NodeMkdirer)((*StorachaDir)(nil))
-var _ = (fs.NodeUnlinker)((*StorachaDir)(nil))
-var _ = (fs.NodeRmdirer)((*StorachaDir)(nil))
+// // For file creation and modification
+// var _ = (fs.NodeCreater)((*StorachaDir)(nil))
+// var _ = (fs.NodeMkdirer)((*StorachaDir)(nil))
+// var _ = (fs.NodeUnlinker)((*StorachaDir)(nil))
+// var _ = (fs.NodeRmdirer)((*StorachaDir)(nil))
 
-func (d *StorachaDir) Create(ctx context.Context, name string, mode uint32, umask uint32, flags uint32) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (d *StorachaDir) Create(ctx context.Context, name string, mode uint32, umask uint32, flags uint32) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (d *StorachaDir) Mkdir(ctx context.Context, name string, mode uint32, umask uint32) (*fs.Inode, uint32, syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (d *StorachaDir) Mkdir(ctx context.Context, name string, mode uint32, umask uint32) (*fs.Inode, uint32, syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (d *StorachaDir) Unlink(ctx context.Context, name string) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (d *StorachaDir) Unlink(ctx context.Context, name string) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (d *StorachaDir) Rmdir(ctx context.Context, name string) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (d *StorachaDir) Rmdir(ctx context.Context, name string) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (d *StorachaDir) Rename(ctx context.Context, name string, newParent *fs.Inode, newName string, flags uint32) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (d *StorachaDir) Rename(ctx context.Context, name string, newParent *fs.Inode, newName string, flags uint32) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-var _ = (fs.FileWriter)((*StorachaFile)(nil))
-var _ = (fs.FileFlusher)((*StorachaFile)(nil))
-var _ = (fs.FileReleaser)((*StorachaFile)(nil))
-var _ = (fs.FileFsyncer)((*StorachaFile)(nil))
+// var _ = (fs.FileWriter)((*StorachaFile)(nil))
+// var _ = (fs.FileFlusher)((*StorachaFile)(nil))
+// var _ = (fs.FileReleaser)((*StorachaFile)(nil))
+// var _ = (fs.FileFsyncer)((*StorachaFile)(nil))
 
-func (f *StorachaFile) Write(ctx context.Context, data []byte, off int64) (int, syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (f *StorachaFile) Write(ctx context.Context, data []byte, off int64) (int, syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (f *StorachaFile) Flush(ctx context.Context) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (f *StorachaFile) Flush(ctx context.Context) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (f *StorachaFile) Release(ctx context.Context) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (f *StorachaFile) Release(ctx context.Context) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (f *StorachaFile) Fsync(ctx context.Context, flags int) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (f *StorachaFile) Fsync(ctx context.Context, flags int) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
-func (f *StorachaFile) Setattr(ctx context.Context, attr *fuse.SetAttrIn, out *fuse.AttrOut) (syscall.Errno) {
-    client , _ = auth.EmailAuth(email)
+// func (f *StorachaFile) Setattr(ctx context.Context, attr *fuse.SetAttrIn, out *fuse.AttrOut) (syscall.Errno) {
+//     client , _ = auth.EmailAuth(email)
     
-}
+// }
 
 // ---------- helpers ----------
 
