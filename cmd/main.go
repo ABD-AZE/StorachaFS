@@ -17,14 +17,10 @@ import (
 
 func main() {
 	log.SetFlags(0)
-	// if len(os.Args) < 3 {
-	// 	usage()
-	// }
 	mountCmd(os.Args[1:])
 }
 
 func usage() {
-	// usage message
 	fmt.Fprintf(os.Stderr, `Usage:
   storachafs <CID> <mountpoint> [options]
 

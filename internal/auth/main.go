@@ -142,15 +142,11 @@ func loadPrivateKey(privateKeyPath string) (principal.Signer, error) {
 
 	keyString := strings.TrimSpace(string(keyData))
 
-	fmt.Printf("Loaded private key from: %s (%d chars)\n", privateKeyPath, len(keyString))
-
 	// decoding base64 private key (getting issue here)
 	keybytes, err := base64.StdEncoding.DecodeString(keyString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode base64 private key: %w", err)
 	}
-
-	fmt.Printf("Decoded private key: %d bytes (expected 64)\n", len(keybytes))
 
 	issuer, err := signer.FromRaw(keybytes)
 	if err != nil {
@@ -179,14 +175,11 @@ func loadProofs(proofPath string) ([]delegation.Delegation, error) {
 		return nil, fmt.Errorf("failed to read proof file '%s': %w", proofPath, err)
 	}
 
-	fmt.Printf("Loaded proof from: %s (%d bytes)\n", proofPath, len(prfbytes))
-
 	proof, err := guppyDelegation.ExtractProof(prfbytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse proof: %w", err)
 	}
 
-	fmt.Printf("Successfully parsed proof delegation\n")
 	return []delegation.Delegation{proof}, nil
 }
 
@@ -235,12 +228,18 @@ func ValidateAuthConfig(config *AuthConfig) error {
 	}
 
 	if privateKeyPath[0] == '~' {
-		homeDir, _ := os.UserHomeDir()
+		homeDir, err := os.UserHomeDir()
+		if err != nil || homeDir == "" {
+			return fmt.Errorf("failed to get home directory: %w", err)
+		}
 		privateKeyPath = filepath.Join(homeDir, privateKeyPath[1:])
 	}
 
 	if proofPath[0] == '~' {
-		homeDir, _ := os.UserHomeDir()
+		homeDir, err := os.UserHomeDir()
+		if err != nil || homeDir == "" {
+			return fmt.Errorf("failed to get home directory: %w", err)
+		}
 		proofPath = filepath.Join(homeDir, proofPath[1:])
 	}
 
