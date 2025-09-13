@@ -9,7 +9,6 @@ import (
 
 	"github.com/ABD-AZE/StorachaFS/internal/auth"
 	"github.com/ABD-AZE/StorachaFS/internal/fuse"
-	pkauth "github.com/ABD-AZE/StorachaFS/internal/pk-auth"
 	"github.com/hanwen/go-fuse/v2/fs"
 	fusefs "github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/storacha/guppy/pkg/client"
@@ -160,7 +159,7 @@ func mountCmd(args []string) {
 		log.Println("Mounting in read-only mode (no authentication)")
 		storachaClient = nil
 	} else {
-		authMethod, err := pkauth.GetAuthMethodFromArgs(*email, *privateKeyPath, *proofPath, *spaceDID)
+		authMethod, err := auth.GetAuthMethodFromArgs(*email, *privateKeyPath, *proofPath, *spaceDID)
 		if err != nil {
 			log.Fatalf("Authentication error: %v", err)
 		}
@@ -176,22 +175,22 @@ func mountCmd(args []string) {
 
 		case "private_key":
 			log.Println("Using private key authentication...")
-			var authConfig *pkauth.AuthConfig
+			var authConfig *auth.AuthConfig
 
 			if *privateKeyPath != "" && *proofPath != "" && *spaceDID != "" {
-				authConfig = pkauth.LoadAuthConfigFromFlags(*privateKeyPath, *proofPath, *spaceDID)
+				authConfig = auth.LoadAuthConfigFromFlags(*privateKeyPath, *proofPath, *spaceDID)
 			} else {
-				authConfig, err = pkauth.LoadAuthConfigFromEnv()
+				authConfig, err = auth.LoadAuthConfigFromEnv()
 				if err != nil {
 					log.Fatalf("Private key authentication failed: %v", err)
 				}
 			}
 
-			if err := pkauth.ValidateAuthConfig(authConfig); err != nil {
+			if err := auth.ValidateAuthConfig(authConfig); err != nil {
 				log.Fatalf("Authentication validation failed: %v", err)
 			}
 
-			storachaClient, err = pkauth.PrivateKeyAuth(authConfig)
+			storachaClient, err = auth.PrivateKeyAuth(authConfig)
 			if err != nil {
 				log.Fatalf("Private key authentication failed: %v", err)
 			}

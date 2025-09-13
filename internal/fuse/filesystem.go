@@ -16,6 +16,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	// "github.com/ABD-AZE/StorachaFS/internal/auth"
 )
 
 // ---------- Storacha client abstraction ----------
@@ -391,8 +392,9 @@ func (h *fileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.Rea
 // var _ = (fs.NodeRmdirer)((*StorachaDir)(nil))
 
 // func (d *StorachaDir) Create(ctx context.Context, name string, mode uint32, umask uint32, flags uint32) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-//     client , _ = auth.EmailAuth(email)
-    
+//     if d.client == nil{
+//        d.client = auth.CachedClients["pk"] || auth.CachedClients["email"]
+//     }
 // }
 
 // func (d *StorachaDir) Mkdir(ctx context.Context, name string, mode uint32, umask uint32) (*fs.Inode, uint32, syscall.Errno) {
