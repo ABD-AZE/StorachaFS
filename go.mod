@@ -7,6 +7,7 @@ toolchain go1.24.7
 require (
 	github.com/PuerkitoBio/goquery v1.10.3
 	github.com/hanwen/go-fuse/v2 v2.8.0
+	github.com/spf13/cobra v1.2.1
 	github.com/storacha/go-ucanto v0.5.0
 	github.com/storacha/guppy v0.0.4-0.20250829140303-f81f70572104
 )
@@ -22,6 +23,7 @@ require (
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
+	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/ipfs/bbloom v0.0.4 // indirect
 	github.com/ipfs/boxo v0.30.0 // indirect
 	github.com/ipfs/go-block-format v0.2.1 // indirect
@@ -59,6 +61,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/polydawn/refmt v0.89.1-0.20231129105047-37766d95467a // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/storacha/go-libstoracha v0.2.0 // indirect
 	github.com/ucan-wg/go-ucan v0.0.0-20240916120445-37f52863156c // indirect
 	github.com/whyrusleeping/cbor-gen v0.3.1 // indirect
