@@ -13,7 +13,6 @@ import (
 
 	"github.com/ABD-AZE/StorachaFS/internal/auth"
 	"github.com/ABD-AZE/StorachaFS/internal/fuse"
-	pkauth "github.com/ABD-AZE/StorachaFS/internal/pk-auth"
 	"github.com/hanwen/go-fuse/v2/fs"
 	fusefs "github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/spf13/cobra"
@@ -80,7 +79,7 @@ Examples:
 
 		// Determine authentication method and validate
 		if !readOnly {
-			authMethod, err := pkauth.GetAuthMethodFromArgs(email, privateKeyPath, proofPath, spaceDID)
+			authMethod, err := auth.GetAuthMethodFromArgs(email, privateKeyPath, proofPath, spaceDID)
 			if err != nil {
 				log.Fatalf("Authentication error: %v", err)
 			}
@@ -92,16 +91,16 @@ Examples:
 			case "private_key":
 				log.Println("Using private key authentication...")
 				// Validate private key authentication
-				var authConfig *pkauth.AuthConfig
+				var authConfig *auth.AuthConfig
 				if privateKeyPath != "" && proofPath != "" && spaceDID != "" {
-					authConfig = pkauth.LoadAuthConfigFromFlags(privateKeyPath, proofPath, spaceDID)
+					authConfig = auth.LoadAuthConfigFromFlags(privateKeyPath, proofPath, spaceDID)
 				} else {
-					authConfig, err = pkauth.LoadAuthConfigFromEnv()
+					authConfig, err = auth.LoadAuthConfigFromEnv()
 					if err != nil {
 						log.Fatalf("Private key authentication failed: %v", err)
 					}
 				}
-				if err := pkauth.ValidateAuthConfig(authConfig); err != nil {
+				if err := auth.ValidateAuthConfig(authConfig); err != nil {
 					log.Fatalf("Authentication validation failed: %v", err)
 				}
 				// For private key auth, we'll use a placeholder email for the filesystem
