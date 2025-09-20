@@ -82,13 +82,13 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 	}
 
 	var entries []FileEntry
-	
+
 	// First, collect all the direct CID links (these contain the actual file CIDs)
 	cidMap := make(map[string]string) // filename -> CID
 	doc.Find("a.ipfs-hash").Each(func(i int, s *goquery.Selection) {
 		href, _ := s.Attr("href")
 		href = strings.Split(href, "?")[0] // strip query params
-		
+
 		parts := strings.Split(strings.Trim(href, "/"), "/")
 		if len(parts) >= 2 && parts[0] == "ipfs" {
 			cid := parts[1]
@@ -108,14 +108,14 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 			}
 		}
 	})
-	
+
 	// Then, process the file path links to get the filenames
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
 		// Skip if this is a CID hash link (we already processed these)
 		if s.HasClass("ipfs-hash") {
 			return
 		}
-		
+
 		href, _ := s.Attr("href")
 		href = strings.Split(href, "?")[0] // strip query params
 		if href == "" || href == "../" {
@@ -138,7 +138,7 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 		if name == "" || name == "../" {
 			return
 		}
-		
+
 		// Get the corresponding CID from our map
 		childCID, exists := cidMap[name]
 		if !exists {
@@ -147,7 +147,7 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 		}
 
 		isDir := strings.HasSuffix(href, "/")
-		
+
 		// Get file size for non-directory entries
 		var size uint64
 		if !isDir {
@@ -223,7 +223,7 @@ func (r *bytesRS) Read(p []byte) (int, error) {
 	r.off += int64(n)
 	return n, nil
 }
- 
+
 // This is the method called by OS when cat or other command seeks the file
 func (r *bytesRS) Seek(off int64, whence int) (int64, error) {
 	var n int64
@@ -279,7 +279,6 @@ func (r *StorachaFS) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.At
 	out.Mode = fuse.S_IFDIR | 0555
 	return 0
 }
-
 
 // currently contains fake values
 func (r *StorachaFS) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
@@ -399,22 +398,22 @@ func (h *fileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.Rea
 
 // func (d *StorachaDir) Mkdir(ctx context.Context, name string, mode uint32, umask uint32) (*fs.Inode, uint32, syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (d *StorachaDir) Unlink(ctx context.Context, name string) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (d *StorachaDir) Rmdir(ctx context.Context, name string) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (d *StorachaDir) Rename(ctx context.Context, name string, newParent *fs.Inode, newName string, flags uint32) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // var _ = (fs.FileWriter)((*StorachaFile)(nil))
@@ -424,27 +423,27 @@ func (h *fileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.Rea
 
 // func (f *StorachaFile) Write(ctx context.Context, data []byte, off int64) (int, syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (f *StorachaFile) Flush(ctx context.Context) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (f *StorachaFile) Release(ctx context.Context) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (f *StorachaFile) Fsync(ctx context.Context, flags int) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // func (f *StorachaFile) Setattr(ctx context.Context, attr *fuse.SetAttrIn, out *fuse.AttrOut) (syscall.Errno) {
 //     client , _ = auth.EmailAuth(email)
-    
+
 // }
 
 // ---------- helpers ----------

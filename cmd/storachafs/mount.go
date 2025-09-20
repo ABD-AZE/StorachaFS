@@ -189,9 +189,9 @@ func init() {
 // isCID checks if a string looks like a valid CID
 func isCID(s string) bool {
 	// Simple heuristic: CIDs typically start with "Qm" (v0) or "bafy" (v1) and are long
-	return (strings.HasPrefix(s, "Qm") && len(s) == 46) || 
-		   (strings.HasPrefix(s, "bafy") && len(s) > 50) ||
-		   (strings.HasPrefix(s, "bafk") && len(s) > 50)
+	return (strings.HasPrefix(s, "Qm") && len(s) == 46) ||
+		(strings.HasPrefix(s, "bafy") && len(s) > 50) ||
+		(strings.HasPrefix(s, "bafk") && len(s) > 50)
 }
 
 // uploadDirectory uploads a local directory to Storacha and returns the root CID
@@ -215,7 +215,11 @@ func uploadDirectory(localPath, email string, debug bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create in-memory database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close database: %v", closeErr)
+		}
+	}()
 
 	// Initialize the database schema
 	if _, err := db.Exec(sqlrepo.Schema); err != nil {
@@ -241,7 +245,7 @@ func uploadDirectory(localPath, email string, debug bool) (string, error) {
 	}
 
 	if debug {
-		log.Printf("Created source: %s", source.Name)
+		log.Printf("Created source: %s", source.Name())
 	}
 
 	// Create uploads for the source
