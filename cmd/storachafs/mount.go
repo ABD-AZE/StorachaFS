@@ -6,30 +6,36 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
-	"strings"
+
+	// "strings"
 	"time"
 
 	"github.com/ABD-AZE/StorachaFS/internal/auth"
 	"github.com/ABD-AZE/StorachaFS/internal/fuse"
-	"github.com/hanwen/go-fuse/v2/fs"
+	gofusefs "github.com/hanwen/go-fuse/v2/fs"
 	fusefs "github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/ipld/go-ipld-prime"
 	"github.com/spf13/cobra"
 
-	// UCAN / DID / signer
-	"github.com/storacha/go-ucanto/core/delegation"
-	"github.com/storacha/go-ucanto/did"
-	"github.com/storacha/go-ucanto/principal"
-	"github.com/storacha/go-ucanto/principal/ed25519/signer"
-	guppyDelegation "github.com/storacha/guppy/pkg/delegation"
+	// "github.com/stretchr/testify/require"
 
-	// Guppy client
+	// "github.com/storacha/go-ucanto/core/delegation"
+	"github.com/storacha/go-ucanto/core/result"
+	"github.com/storacha/go-ucanto/did"
+
+	// "github.com/storacha/go-ucanto/principal"
+	// GuppyDelegation "github.com/storacha/guppy/pkg/delegation"
 	"github.com/storacha/guppy/pkg/client"
 
-	// CAR + CID + multihash
-	ipfscid "github.com/ipfs/go-cid"
-	carv2 "github.com/ipld/go-car/v2"
-	"github.com/multiformats/go-multihash"
+	"database/sql"
+
+	cidlink "github.com/ipld/go-ipld-prime/linking/cid"
+	"github.com/storacha/guppy/pkg/didmailto"
+	"github.com/storacha/guppy/pkg/preparation"
+	"github.com/storacha/guppy/pkg/preparation/shards/model"
+	"github.com/storacha/guppy/pkg/preparation/sqlrepo"
+
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -127,7 +133,7 @@ var mountCmd = &cobra.Command{
 		// Create filesystem
 		root := fuse.NewStorachaFS(finalCID, debug)
 
-		opts := &fs.Options{
+		opts := &gofusefs.Options{
 			MountOptions: fusefs.MountOptions{
 				FsName: fmt.Sprintf("storachafs-%s", finalCID),
 				Name:   "storachafs",
@@ -136,7 +142,7 @@ var mountCmd = &cobra.Command{
 			AttrTimeout:  &attrTTL,
 		}
 
-		server, err := fs.Mount(mnt, root, opts)
+		server, err := gofusefs.Mount(mnt, root, opts)
 		if err != nil {
 			log.Fatalf("mount: %v", err)
 		}
@@ -166,264 +172,167 @@ func init() {
 	mountCmd.Flags().BoolVar(&readOnly, "read-only", false, "mount in read-only mode (no authentication)")
 }
 
-// uploadDirectoryWithAuth: pack dir to CAR, store shard with StoreAdd, then UploadAdd to register upload.
-// Accepts either email interactive auth (requires user to authenticate via RequestAccess/CLI flow) OR
-// requires private-key + proof for non-interactive auth. For simplicity this implementation prefers private-key+proof.
-func uploadDirectoryWithAuth(localPath, emailArg, privateKeyPathArg, proofPathArg, spaceDIDStr string, debug bool) (string, error) {
+func uploadDirectoryWithAuth(sourcePath, email, privateKeyPath, proofPath, spaceDID string, debug bool) (string, error) {
 	ctx := context.Background()
-
-	// validate
-	if localPath == "" {
-		return "", fmt.Errorf("localPath required")
+	if sourcePath == "" {
+		return  "", fmt.Errorf("source path is required for upload")
 	}
 
 	// parse space
-	space, err := did.Parse(spaceDIDStr)
+	spaceDid, err := did.Parse(spaceDID)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse space DID '%s': %v", spaceDIDStr, err)
-	}
-
-	// load signer + proofs (preferred path for programmatic upload)
-	var issuer principal.Signer
-	var proofs []delegation.Delegation
-	if privateKeyPathArg != "" && proofPathArg != "" {
-		privBytes, err := os.ReadFile(privateKeyPathArg)
-		if err != nil {
-			return "", fmt.Errorf("read private key: %v", err)
-		}
-		issuer, err = signer.Parse(strings.TrimSpace(string(privBytes)))
-		if err != nil {
-			return "", fmt.Errorf("parse private key: %v", err)
-		}
-
-		prfBytes, err := os.ReadFile(proofPathArg)
-		if err != nil {
-			return "", fmt.Errorf("read proof file: %v", err)
-		}
-		proof, err := guppyDelegation.ExtractProof(prfBytes)
-		if err != nil {
-			return "", fmt.Errorf("extract proofs: %v", err)
-		}
-		proofs = []delegation.Delegation{proof}
-	} else if emailArg != "" {
-		// Interactive flow: use email auth but we need issuer & proofs for the upload API
-		if debug {
-			log.Printf("Using email authentication for upload (interactive)")
-		}
-		guppyClient, err := auth.EmailAuth(emailArg)
-		if err != nil {
-			return "", fmt.Errorf("email auth failed: %v", err)
-		}
-
-		// For email auth, we need to extract the issuer and proofs from the authenticated client
-		// This is a workaround since the upload APIs expect issuer + proofs directly
-		// In practice, you might want to use the client's upload methods directly if available
-
-		// Pack directory to CAR (shell out)
-		carPath, err := packDirectoryToCAR(localPath, debug)
-		if err != nil {
-			return "", fmt.Errorf("packDirectoryToCAR: %v", err)
-		}
-		defer func() { _ = os.Remove(carPath) }()
-
-		// Get root CID from CAR
-		rootCid, err := carRootCIDFromFile(carPath)
-		if err != nil {
-			return "", fmt.Errorf("get car root cid: %v", err)
-		}
-
-		// Use the authenticated guppy client to upload the CAR file directly
-		carFile, err := os.Open(carPath)
-		if err != nil {
-			return "", fmt.Errorf("open car file: %v", err)
-		}
-		defer func() { _ = carFile.Close() }()
-
-		// Use SpaceBlobAdd method for email-authenticated uploads
-		// NOTE: SpaceBlobAdd uploads the CAR file to the space and returns the space's CID for this content
-		blobCid, _, err := guppyClient.SpaceBlobAdd(ctx, carFile, space)
-		if err != nil {
-			return "", fmt.Errorf("SpaceBlobAdd failed: %v", err)
-		}
-
-		if debug {
-			log.Printf("Email-based upload completed. UnixFS root: %s, Space blob CID: %s", rootCid.String(), blobCid.String())
-		}
-
-		// CRITICAL: Return the space's blob CID, not the UnixFS root CID
-		return blobCid.String(), nil
+		return "", fmt.Errorf("failed to parse space DID: %v", err)
 	} else {
-		return "", fmt.Errorf("provide --private-key and --proof for programmatic upload")
+		log.Printf("Using space: %s", spaceDid	.String())
 	}
-
-	// pack directory to CAR (shell out)
-	carPath, err := packDirectoryToCAR(localPath, debug)
-	if err != nil {
-		return "", fmt.Errorf("packDirectoryToCAR: %v", err)
-	}
-	// make sure temp file cleaned up
-	defer func() { _ = os.Remove(carPath) }()
-
-	// read CAR bytes (docs example uses full bytes; for large CARs prefer streaming)
-	carBytes, err := os.ReadFile(carPath)
-	if err != nil {
-		return "", fmt.Errorf("read car file: %v", err)
-	}
-
-	// compute CAR multihash (sha2-256)
-	mh, err := multihash.Sum(carBytes, multihash.SHA2_256, -1)
-	if err != nil {
-		return "", fmt.Errorf("multihash sum: %v", err)
-	}
-	// build CAR shard CID (cidv1, codec 0x0202 per docs)
-	shardCid := ipfscid.NewCidV1(0x0202, mh) // 0x0202 = CAR codec
-
-	// read root CID(s) from CAR using go-car
-	rootCid, err := carRootCIDFromFile(carPath)
-	if err != nil {
-		return "", fmt.Errorf("get car root cid: %v", err)
-	}
-
-	if debug {
-		log.Printf("CAR root: %s ; shard CID: %s ; size: %d bytes", rootCid.String(), shardCid.String(), len(carBytes))
-	}
-
-	// Create a Guppy client with the issuer and proofs
-	guppyClient, err := client.NewClient(client.WithPrincipal(issuer))
-	if err != nil {
-		return "", fmt.Errorf("failed to create guppy client: %v", err)
-	}
-
-	// Add proofs to the client
-	if err := guppyClient.AddProofs(proofs...); err != nil {
-		return "", fmt.Errorf("failed to add proofs to client: %v", err)
-	}
-
-	// Use SpaceBlobAdd to upload the CAR file
-	carFile, err := os.Open(carPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open CAR file: %v", err)
-	}
-	defer func() { _ = carFile.Close() }()
-
-	// Upload the CAR using SpaceBlobAdd
-	// NOTE: SpaceBlobAdd uploads the CAR file to the space and returns the space's CID for this content
-	blobMultihash, _, err := guppyClient.SpaceBlobAdd(ctx, carFile, space)
-	if err != nil {
-		return "", fmt.Errorf("SpaceBlobAdd failed: %v", err)
-	}
-
-	actualCid := ipfscid.NewCidV1(0x55, blobMultihash) // 0x55 = raw codec
-	if debug {
-		log.Printf("CAR uploaded to space. UnixFS root: %s, Space blob CID: %s", rootCid.String(), actualCid.String())
-	}
-	return actualCid.String(), nil
-	// CRITICAL: Return the space's blob CID, not the UnixFS root CID
-	// The space blob CID is what exists in the space DAG and can be mounted
-	// The UnixFS root CID is internal to the CAR file and not directly accessible
-}
-
-// packDirectoryToCAR: tries `npx ipfs-car pack <dir> --output <tmp>` first, falls back to `car create` (go-car) for directory packing
-// Returns path to temp CAR file.
-func packDirectoryToCAR(srcDir string, debug bool) (string, error) {
-	// ensure directory
-	info, err := os.Stat(srcDir)
-	if err != nil {
-		return "", fmt.Errorf("stat source dir: %v", err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("source not a directory")
-	}
-
-	tmp, err := os.CreateTemp("", "storacha-*.car")
-	if err != nil {
-		return "", fmt.Errorf("create tmp file: %v", err)
-	}
-	tmpPath := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temp file: %v", err)
-	}
-
-	// try ipfs-car (Node.js tool) - primary choice for directories
-	if path, e := exec.LookPath("npx"); e == nil && path != "" {
-		cmd := exec.Command("npx", "ipfs-car", "pack", srcDir, "--output", tmpPath)
-		if debug {
-			log.Printf("Running: %s", strings.Join(cmd.Args, " "))
-		}
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			if debug {
-				log.Printf("ipfs-car output: %s", string(out))
-			}
-			return tmpPath, nil
-		}
-		if debug {
-			log.Printf("ipfs-car failed: %v out=%s", err, string(out))
-		}
-	}
-
-	// fallback: try `car create` (go-car)
-	if path, e := exec.LookPath("car"); e == nil && path != "" {
-		cmd := exec.Command("car", "create", "-o", tmpPath, srcDir)
-		if debug {
-			log.Printf("Running: %s", strings.Join(cmd.Args, " "))
-		}
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			if debug {
-				log.Printf("car create output: %s", string(out))
-			}
-			return tmpPath, nil
-		}
-		if debug {
-			log.Printf("car create failed: %v out=%s", err, string(out))
-		}
-	}
-
-	// try ipfs-car (npm) - alternative if npx not available
-	if path, e := exec.LookPath("ipfs-car"); e == nil && path != "" {
-		// ipfs-car usage: ipfs-car --pack <dir> --output <out>
-		cmd := exec.Command("ipfs-car", "--pack", srcDir, "--output", tmpPath)
-		if debug {
-			log.Printf("Running: %s", strings.Join(cmd.Args, " "))
-		}
-		out, err := cmd.CombinedOutput()
+	// var issuer principal.Signer
+	// var proofs []delegation.Delegation
+	if privateKeyPath != "" && proofPath != "" {
+		// todo
+	} else if email != "" {
+		cl, err := client.NewClient()
 		if err != nil {
-			if debug {
-				log.Printf("ipfs-car failed: %v out=%s", err, string(out))
-			}
-			_ = os.Remove(tmpPath)
-			return "", fmt.Errorf("ipfs-car pack failed: %v: %s", err, string(out))
+			return "", fmt.Errorf("failed to create client: %v", err)
+		}
+		// request access;
+		accountDiD, err := didmailto.FromEmail(email	)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse email DID: %v", err)
 		}
 		if debug {
-			log.Printf("ipfs-car output: %s", string(out))
+			log.Printf("Requesting access for %s", accountDiD.String())
 		}
-		return tmpPath, nil
-	}
 
-	_ = os.Remove(tmpPath)
-	return "", fmt.Errorf("no CAR packer found on PATH; install go-car (car) or ipfs-car (npm)")
+		// request access
+		authOk, err := cl.RequestAccess(ctx, accountDiD.String())
+		if err != nil {
+			return "", fmt.Errorf("failed to request access: %v", err)
+		}
+
+		// poll for user verification
+		if debug {
+			log.Printf("Waiting for user to verify access request...")
+		}
+		delegationResult := cl.PollClaim(ctx, authOk)
+		r := <-delegationResult
+
+		delegation, err := result.Unwrap(r)
+		if err != nil {
+			return "", fmt.Errorf("failed to claim access: %v", err)
+		}
+
+		if len(delegation) == 0 {
+			return "", fmt.Errorf("no delegations received after claiming access")
+		}
+
+		if debug {
+			log.Printf("Received Delegation, size: %d", len(delegation))
+		}
+		cl.AddProofs(delegation...)
+
+		// data preparation system setup
+		db, err := createDatabase()
+		if err != nil {
+			return "", fmt.Errorf("failed to create database: %w", err)
+		}
+		defer db.Close()
+
+		repo := sqlrepo.New(db)
+		api := preparation.NewAPI(repo, cl, spaceDid)
+		if debug {
+			log.Printf("Starting upload of directory: %s", sourcePath)
+		}
+		
+		if err != nil {
+			return "", fmt.Errorf("failed to create configuration: %w", err)
+		}
+		source, err := api.CreateSource(ctx, "temp", sourcePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to create source: %w", err)
+		}
+		space, err := api.Spaces.FindOrCreateSpace(ctx, spaceDid, "temp")
+		if err != nil {
+			return "", fmt.Errorf("failed to create or find space: %w", err)
+		}
+		err = api.Spaces.Repo.AddSourceToSpace(ctx, space.DID(), source.ID())
+		if err != nil {
+			return "", fmt.Errorf("failed to add source to space: %w", err)
+		}
+		if debug {
+			log.Printf("Source created with ID: %s", source.ID())
+		}
+		uploads, err := api.CreateUploads(ctx, space.DID())
+		if err != nil {
+			return "", fmt.Errorf("failed to create uploads: %w", err)
+		}
+		if len(uploads) == 0 {
+			return "", fmt.Errorf("no uploads created")
+		}
+		if debug {
+			log.Printf("Created %d upload(s)", len(uploads))
+		}
+		// just uploads[0] for now
+		rootCID, err := api.ExecuteUpload(ctx, uploads[0])
+		if err != nil {
+			return "", fmt.Errorf("failed to execute upload: %w", err)
+		}
+		if debug {
+			log.Printf("Upload completed with root CID: %s", rootCID)
+		}
+		// Get the shard links that were uploaded  
+		shards, err := repo.ShardsForUploadByStatus(ctx, uploads[0].ID(), model.ShardStateAdded)
+		if err != nil {
+			return "", fmt.Errorf("failed to get shards for upload: %w", err)
+		}
+		if len(shards) == 0 {
+			return "", fmt.Errorf("no shards found for upload")
+		}
+		if debug {
+			log.Printf("Found %d shard(s) for upload", len(shards))
+		}  
+		var shardLinks []ipld.Link
+		// TODO : how to get the shardlinks??
+		for _, shard := range shards {
+			shardLinks = append(shardLinks, )
+		}
+		rootLink := cidlink.Link{Cid: rootCID}
+		// Register the upload  
+		addOk, err := cl.UploadAdd(ctx, space.DID(), rootLink, shardLinks)
+		if err != nil {
+			return "", fmt.Errorf("failed to register upload: %w", err)
+		}
+		if debug {
+			log.Printf("Upload registered successfully: %+v", addOk)
+		}
+		return addOk.Root.String(), nil
+	} else {
+		return "", fmt.Errorf("unsupported authentication method")
+	}
+	return "temp", nil
+
 }
 
-// carRootCIDFromFile uses go-car to open the CAR and returns the first root CID (ipfs/go-cid)
-func carRootCIDFromFile(carPath string) (ipfscid.Cid, error) {
-	f, err := os.Open(carPath)
+func createDatabase() (*sql.DB, error) {
+	db, err := sql.Open("sqlite", "file::memory:?mode=memory&cache=shared")
 	if err != nil {
-		return ipfscid.Cid{}, err
+		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 	}
-	defer func() { _ = f.Close() }()
 
-	r, err := carv2.NewReader(f)
+	// Initialize schema
+	_, err = db.Exec(sqlrepo.Schema)
 	if err != nil {
-		return ipfscid.Cid{}, fmt.Errorf("open car: %v", err)
+		db.Close()
+		return nil, fmt.Errorf("failed to execute schema: %w", err)
 	}
-	roots, err := r.Roots()
+
+	_, err = db.Exec("PRAGMA foreign_keys = OFF;")
 	if err != nil {
-		return ipfscid.Cid{}, fmt.Errorf("failed to get roots: %v", err)
+		db.Close()
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
-	if len(roots) == 0 {
-		return ipfscid.Cid{}, fmt.Errorf("car has no roots")
-	}
-	root := roots[0]
-	return root, nil
+
+	return db, nil
 }
+
+
+	
