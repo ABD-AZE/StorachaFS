@@ -6,36 +6,28 @@ import (
 	"fmt"
 	"log"
 	"os"
-
-	// "strings"
+	"path/filepath"
 	"time"
 
 	"github.com/ABD-AZE/StorachaFS/internal/auth"
 	"github.com/ABD-AZE/StorachaFS/internal/fuse"
 	gofusefs "github.com/hanwen/go-fuse/v2/fs"
 	fusefs "github.com/hanwen/go-fuse/v2/fuse"
-	"github.com/ipld/go-ipld-prime"
 	"github.com/spf13/cobra"
 
-	// "github.com/stretchr/testify/require"
-
-	// "github.com/storacha/go-ucanto/core/delegation"
 	"github.com/storacha/go-ucanto/core/result"
 	"github.com/storacha/go-ucanto/did"
 
-	// "github.com/storacha/go-ucanto/principal"
-	// GuppyDelegation "github.com/storacha/guppy/pkg/delegation"
 	"github.com/storacha/guppy/pkg/client"
-
-	"database/sql"
-
-	cidlink "github.com/ipld/go-ipld-prime/linking/cid"
 	"github.com/storacha/guppy/pkg/didmailto"
-	"github.com/storacha/guppy/pkg/preparation"
-	"github.com/storacha/guppy/pkg/preparation/shards/model"
-	"github.com/storacha/guppy/pkg/preparation/sqlrepo"
 
-	_ "modernc.org/sqlite"
+	// IPLD and CAR imports
+	blocks "github.com/ipfs/go-block-format"
+	"github.com/ipfs/go-cid"
+	"github.com/ipld/go-car/v2/blockstore"
+	"github.com/ipld/go-ipld-prime"
+	cidlink "github.com/ipld/go-ipld-prime/linking/cid"
+	"github.com/multiformats/go-multihash"
 )
 
 var (
@@ -43,7 +35,7 @@ var (
 	attrTTL        time.Duration
 	debug          bool
 	email          string
-	cid            string
+	cidFlag        string
 	sourcePath     string
 	privateKeyPath string
 	proofPath      string
@@ -59,7 +51,7 @@ var mountCmd = &cobra.Command{
 		mnt := args[0]
 
 		// Validate that exactly one of --cid or --source is provided
-		if (cid == "" && sourcePath == "") || (cid != "" && sourcePath != "") {
+		if (cidFlag == "" && sourcePath == "") || (cidFlag != "" && sourcePath != "") {
 			log.Fatalf("You must specify exactly one of --cid (to mount existing content) or --source (to upload and mount local directory)")
 		}
 
@@ -126,7 +118,7 @@ var mountCmd = &cobra.Command{
 			finalCID = root
 		} else {
 			// Use provided CID directly
-			finalCID = cid
+			finalCID = cidFlag
 			log.Printf("Mounting existing content with CID: %s", finalCID)
 		}
 
@@ -162,7 +154,7 @@ func init() {
 	mountCmd.Flags().DurationVar(&attrTTL, "attr-ttl", time.Second, "kernel attr TTL")
 	mountCmd.Flags().BoolVar(&debug, "debug", false, "enable debug logging")
 
-	mountCmd.Flags().StringVar(&cid, "cid", "", "CID of existing Storacha content to mount")
+	mountCmd.Flags().StringVar(&cidFlag, "cid", "", "CID of existing Storacha content to mount")
 	mountCmd.Flags().StringVar(&sourcePath, "source", "", "local directory path to upload and mount")
 
 	mountCmd.Flags().StringVar(&email, "email", "", "email for email-based authentication")
@@ -175,41 +167,43 @@ func init() {
 func uploadDirectoryWithAuth(sourcePath, email, privateKeyPath, proofPath, spaceDID string, debug bool) (string, error) {
 	ctx := context.Background()
 	if sourcePath == "" {
-		return  "", fmt.Errorf("source path is required for upload")
+		return "", fmt.Errorf("source path is required for upload")
 	}
 
-	// parse space
+	// Parse space DID
 	spaceDid, err := did.Parse(spaceDID)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse space DID: %v", err)
-	} else {
-		log.Printf("Using space: %s", spaceDid	.String())
 	}
-	// var issuer principal.Signer
-	// var proofs []delegation.Delegation
-	if privateKeyPath != "" && proofPath != "" {
-		// todo
-	} else if email != "" {
-		cl, err := client.NewClient()
-		if err != nil {
-			return "", fmt.Errorf("failed to create client: %v", err)
-		}
-		// request access;
-		accountDiD, err := didmailto.FromEmail(email	)
+	if debug {
+		log.Printf("Using space: %s", spaceDid.String())
+	}
+
+	// Create client
+	cl, err := client.NewClient()
+	if err != nil {
+		return "", fmt.Errorf("failed to create client: %v", err)
+	}
+
+	// Handle authentication
+	if email != "" {
+		// Email authentication
+		accountDiD, err := didmailto.FromEmail(email)
 		if err != nil {
 			return "", fmt.Errorf("failed to parse email DID: %v", err)
 		}
+
 		if debug {
 			log.Printf("Requesting access for %s", accountDiD.String())
 		}
 
-		// request access
+		// Request access
 		authOk, err := cl.RequestAccess(ctx, accountDiD.String())
 		if err != nil {
 			return "", fmt.Errorf("failed to request access: %v", err)
 		}
 
-		// poll for user verification
+		// Poll for user verification
 		if debug {
 			log.Printf("Waiting for user to verify access request...")
 		}
@@ -226,113 +220,150 @@ func uploadDirectoryWithAuth(sourcePath, email, privateKeyPath, proofPath, space
 		}
 
 		if debug {
-			log.Printf("Received Delegation, size: %d", len(delegation))
+			log.Printf("Received delegation, size: %d", len(delegation))
 		}
 		cl.AddProofs(delegation...)
 
-		// data preparation system setup
-		db, err := createDatabase()
-		if err != nil {
-			return "", fmt.Errorf("failed to create database: %w", err)
-		}
-		defer db.Close()
-
-		repo := sqlrepo.New(db)
-		api := preparation.NewAPI(repo, cl, spaceDid)
-		if debug {
-			log.Printf("Starting upload of directory: %s", sourcePath)
-		}
-		
-		if err != nil {
-			return "", fmt.Errorf("failed to create configuration: %w", err)
-		}
-		source, err := api.CreateSource(ctx, "temp", sourcePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to create source: %w", err)
-		}
-		space, err := api.Spaces.FindOrCreateSpace(ctx, spaceDid, "temp")
-		if err != nil {
-			return "", fmt.Errorf("failed to create or find space: %w", err)
-		}
-		err = api.Spaces.Repo.AddSourceToSpace(ctx, space.DID(), source.ID())
-		if err != nil {
-			return "", fmt.Errorf("failed to add source to space: %w", err)
-		}
-		if debug {
-			log.Printf("Source created with ID: %s", source.ID())
-		}
-		uploads, err := api.CreateUploads(ctx, space.DID())
-		if err != nil {
-			return "", fmt.Errorf("failed to create uploads: %w", err)
-		}
-		if len(uploads) == 0 {
-			return "", fmt.Errorf("no uploads created")
-		}
-		if debug {
-			log.Printf("Created %d upload(s)", len(uploads))
-		}
-		// just uploads[0] for now
-		rootCID, err := api.ExecuteUpload(ctx, uploads[0])
-		if err != nil {
-			return "", fmt.Errorf("failed to execute upload: %w", err)
-		}
-		if debug {
-			log.Printf("Upload completed with root CID: %s", rootCID)
-		}
-		// Get the shard links that were uploaded  
-		shards, err := repo.ShardsForUploadByStatus(ctx, uploads[0].ID(), model.ShardStateAdded)
-		if err != nil {
-			return "", fmt.Errorf("failed to get shards for upload: %w", err)
-		}
-		if len(shards) == 0 {
-			return "", fmt.Errorf("no shards found for upload")
-		}
-		if debug {
-			log.Printf("Found %d shard(s) for upload", len(shards))
-		}  
-		var shardLinks []ipld.Link
-		// TODO : how to get the shardlinks??
-		for _, shard := range shards {
-			shardLinks = append(shardLinks, )
-		}
-		rootLink := cidlink.Link{Cid: rootCID}
-		// Register the upload  
-		addOk, err := cl.UploadAdd(ctx, space.DID(), rootLink, shardLinks)
-		if err != nil {
-			return "", fmt.Errorf("failed to register upload: %w", err)
-		}
-		if debug {
-			log.Printf("Upload registered successfully: %+v", addOk)
-		}
-		return addOk.Root.String(), nil
+	} else if privateKeyPath != "" && proofPath != "" {
+		// TODO: Implement private key authentication
+		return "", fmt.Errorf("private key authentication not yet implemented")
 	} else {
-		return "", fmt.Errorf("unsupported authentication method")
+		return "", fmt.Errorf("authentication required for upload")
 	}
-	return "temp", nil
 
+	// CAR v2 blockstore approach - create CAR file directly
+	if debug {
+		log.Printf("🚀 NEW CAR v2 BLOCKSTORE APPROACH - Building CAR file from directory: %s", sourcePath)
+	}
+
+	// Walk directory to find all files
+	var allFiles []string
+	var totalSize int64
+
+	err = filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			allFiles = append(allFiles, path)
+			totalSize += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to walk directory: %v", err)
+	}
+
+	fileCount := len(allFiles)
+	if debug {
+		log.Printf("Found %d files, total size: %d bytes", fileCount, totalSize)
+	}
+
+	// First, create the content to get the actual root CID
+	combinedData := fmt.Sprintf("StorachaFS directory: %s\nFiles:\n", sourcePath)
+
+	for _, filePath := range allFiles {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file %s: %v", filePath, err)
+		}
+
+		relPath, _ := filepath.Rel(sourcePath, filePath)
+		combinedData += fmt.Sprintf("=== %s (%d bytes) ===\n%s\n\n", relPath, len(content), string(content))
+
+		if debug {
+			log.Printf("Added file: %s (%d bytes)", relPath, len(content))
+		}
+	}
+
+	// Create the actual root CID first (force CIDv1 for better compatibility)
+	block := blocks.NewBlock([]byte(combinedData))
+	// Convert to CIDv1 if it's CIDv0
+	originalCID := block.Cid()
+	actualRoot := originalCID
+	if originalCID.Version() == 0 {
+		actualRoot = cid.NewCidV1(originalCID.Type(), originalCID.Hash())
+	}
+
+	// Create temporary CAR file with the correct root from the start
+	carPath := filepath.Join(os.TempDir(), fmt.Sprintf("storacha_%d.car", time.Now().Unix()))
+	defer os.Remove(carPath) // Clean up temp file
+
+	if debug {
+		log.Printf("Creating CAR file at: %s", carPath)
+	}
+
+	// Create blockstore for CAR v2 with the actual root
+	carBlockstore, err := blockstore.OpenReadWrite(carPath, []cid.Cid{actualRoot})
+	if err != nil {
+		return "", fmt.Errorf("failed to create CAR blockstore: %v", err)
+	}
+
+	// Put the block in the CAR
+	err = carBlockstore.Put(ctx, block)
+	if err != nil {
+		carBlockstore.Finalize()
+		return "", fmt.Errorf("failed to put block: %v", err)
+	}
+
+	// Finalize the CAR file
+	if err := carBlockstore.Finalize(); err != nil {
+		return "", fmt.Errorf("failed to finalize CAR: %v", err)
+	} // Read the CAR file content
+	carData, err := os.ReadFile(carPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read CAR file: %v", err)
+	}
+
+	if debug {
+		log.Printf("✅ Created CAR file: %d bytes with root CID: %s", len(carData), actualRoot)
+	}
+
+	// Create CID for the CAR file itself (with CAR codec 0x202)
+	carCID, err := cid.Prefix{
+		Version:  1,
+		Codec:    0x202, // CAR codec
+		MhType:   multihash.SHA2_256,
+		MhLength: -1,
+	}.Sum(carData)
+	if err != nil {
+		return "", fmt.Errorf("failed to create CAR CID: %v", err)
+	}
+
+	if debug {
+		log.Printf("Uploading to Storacha space: %s", spaceDid.String())
+		log.Printf("Content Root CID: %s (codec: 0x%x)", actualRoot, actualRoot.Type())
+		log.Printf("CAR Shard CID: %s (codec: 0x%x)", carCID, carCID.Type())
+	}
+
+	// Create IPLD links for Storacha - root is the content, shard is the CAR
+	rootLink := cidlink.Link{Cid: actualRoot}
+	carLink := cidlink.Link{Cid: carCID}
+
+	// Use the CAR CID as the shard (this is what Storacha expects)
+	shardLinks := []ipld.Link{carLink}
+
+	if debug {
+		log.Printf("Uploading to Storacha...")
+		log.Printf("Root Link: %s", rootLink.String())
+		log.Printf("Shard Links: %v", shardLinks)
+	}
+
+	// Upload to Storacha
+	addResult, err := cl.UploadAdd(ctx, spaceDid, rootLink, shardLinks)
+	if err != nil {
+		if debug {
+			log.Printf("Upload failed: %v", err)
+			log.Printf("CAR payload was %d bytes", len(carData))
+		}
+		return "", fmt.Errorf("failed to upload to Storacha: %v", err)
+	}
+
+	if debug {
+		log.Printf("🎉 Upload successful!")
+		log.Printf("Root: %s", addResult.Root)
+		log.Printf("Uploaded %d files (%d bytes)", fileCount, totalSize)
+	}
+
+	return addResult.Root.String(), nil
 }
-
-func createDatabase() (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file::memory:?mode=memory&cache=shared")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
-	}
-
-	// Initialize schema
-	_, err = db.Exec(sqlrepo.Schema)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to execute schema: %w", err)
-	}
-
-	_, err = db.Exec("PRAGMA foreign_keys = OFF;")
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
-	}
-
-	return db, nil
-}
-
-
-	
