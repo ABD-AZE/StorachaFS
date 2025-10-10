@@ -56,17 +56,20 @@ func getClientCache() *ClientCache {
 // Get retrieves a client from cache if it exists and hasn't expired
 func (c *ClientCache) Get(key string) (*client.Client, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	cached, exists := c.clients[key]
+	c.mu.RUnlock()
+
 	if !exists {
 		return nil, false
 	}
 
 	// Check if client has expired
 	if time.Since(cached.CreatedAt) > c.ttl {
-		// Remove expired client (will be cleaned up properly on next Set/Clear call)
-		log.Printf("Client cache: expired entry for key %s", key)
+		// Remove expired client immediately
+		c.mu.Lock()
+		delete(c.clients, key)
+		c.mu.Unlock()
+		log.Printf("Client cache: expired entry for key %s (removed)", key)
 		return nil, false
 	}
 
@@ -149,7 +152,10 @@ func (c *ClientCache) SetTTL(ttl time.Duration) {
 
 // Legacy global cache variable for backward compatibility
 // Deprecated: Use the new ClientCache methods instead
+// Note: This map is not thread-safe. It is maintained for backward compatibility
+// but access is protected by updating it only within thread-safe ClientCache operations.
 var CachedClients = make(map[string]*client.Client)
+var legacyCacheMu sync.Mutex
 
 // EmailAuth authenticates using email with caching support
 func EmailAuth(email string) (*client.Client, error) {
@@ -163,14 +169,16 @@ func EmailAuth(email string) (*client.Client, error) {
 	// Not in cache or expired, authenticate
 	client, err := emailAuth(email)
 	if err != nil {
-		return nil, fmt.Errorf("email authentication failed: %w", err)
+		return nil, err
 	}
 
 	// Store in cache
 	cache.Set(email, client)
 
 	// Also update legacy cache for backward compatibility
+	legacyCacheMu.Lock()
 	CachedClients[email] = client
+	legacyCacheMu.Unlock()
 
 	return client, nil
 }
@@ -256,7 +264,9 @@ func PrivateKeyAuth(config *AuthConfig) (*client.Client, error) {
 	cache.Set(cacheKey, c)
 
 	// Also update legacy cache for backward compatibility
+	legacyCacheMu.Lock()
 	CachedClients[cacheKey] = c
+	legacyCacheMu.Unlock()
 
 	// issuer implements principal.Signer so we can call DID() on it
 	fmt.Printf("✓ Authenticated with private key DID: %s\n", issuer.DID().String())
