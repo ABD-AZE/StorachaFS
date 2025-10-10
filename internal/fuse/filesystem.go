@@ -157,9 +157,7 @@ func (c *storachaClient) listTreeRecursive(cid, dirPath string, tree Tree) error
 			resp, err := http.Head(url)
 			if err == nil {
 				size = uint64(resp.ContentLength)
-				if err := resp.Body.Close(); err != nil {
-					log.Printf("Failed to close response body: %v", err)
-				}
+				// No need to close HEAD response body - it's always empty
 			}
 		}
 
@@ -192,11 +190,7 @@ func (c *storachaClient) OpenReader(cid, p string) (io.ReadSeeker, uint64, error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to get file info: %w", err)
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Printf("Failed to close response body: %v", err)
-		}
-	}()
+	// No need to close HEAD response body - it's always empty
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("HTTP request failed with status: %s", resp.Status)
@@ -338,8 +332,9 @@ func (r *HttpStreamReader) Read(p []byte) (int, error) {
 		return 0, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Update offset
+	// Update offset and request time
 	r.offset += int64(n)
+	r.lastRequestTime = time.Now()
 
 	// Handle end of file
 	if r.offset >= r.size {
