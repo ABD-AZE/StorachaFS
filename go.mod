@@ -6,14 +6,12 @@ toolchain go1.24.7
 
 require (
 	github.com/hanwen/go-fuse/v2 v2.8.0
-	github.com/ipfs/go-block-format v0.2.2
+	github.com/ipfs/go-block-format v0.2.3
 	github.com/ipfs/go-cid v0.5.0
 	github.com/ipfs/go-unixfsnode v1.10.2
-	github.com/ipld/go-car/v2 v2.15.0
+	github.com/ipld/go-car/v2 v2.16.0
 	github.com/ipld/go-codec-dagpb v1.7.0
 	github.com/ipld/go-ipld-prime v0.21.1-0.20240917223228-6148356a4c2e
-	github.com/multiformats/go-multicodec v0.9.2
-	github.com/multiformats/go-multihash v0.2.3
 	github.com/spf13/cobra v1.2.1
 	github.com/storacha/go-ucanto v0.6.6
 	github.com/storacha/guppy v0.0.3
@@ -39,7 +37,7 @@ require (
 	github.com/ipfs/go-ipfs-exchange-interface v0.2.1 // indirect
 	github.com/ipfs/go-ipfs-util v0.0.3 // indirect
 	github.com/ipfs/go-ipld-cbor v0.2.1 // indirect
-	github.com/ipfs/go-ipld-format v0.6.2 // indirect
+	github.com/ipfs/go-ipld-format v0.6.3 // indirect
 	github.com/ipfs/go-ipld-legacy v0.2.2 // indirect
 	github.com/ipfs/go-log v0.0.1 // indirect
 	github.com/ipfs/go-log/v2 v2.8.1 // indirect
@@ -57,6 +55,8 @@ require (
 	github.com/multiformats/go-base36 v0.2.0 // indirect
 	github.com/multiformats/go-multiaddr v0.16.1 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
+	github.com/multiformats/go-multicodec v0.9.2 // indirect
+	github.com/multiformats/go-multihash v0.2.3 // indirect
 	github.com/multiformats/go-varint v0.1.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/petar/GoLLRB v0.0.0-20210522233825-ae3b015fd3e9 // indirect

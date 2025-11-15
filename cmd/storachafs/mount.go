@@ -1,11 +1,13 @@
-// cmd/storachafs/mount.go
 package storachafs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -21,10 +23,6 @@ import (
 	"github.com/storacha/guppy/pkg/didmailto"
 
 	// IPLD and CAR imports
-	"bytes"
-	"io"
-	"path"
-
 	blocks "github.com/ipfs/go-block-format"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-unixfsnode/data/builder"
@@ -35,6 +33,8 @@ import (
 	cidlink "github.com/ipld/go-ipld-prime/linking/cid"
 	"github.com/multiformats/go-multicodec"
 	"github.com/multiformats/go-multihash"
+	"crypto/sha256"
+	blobindex "github.com/storacha/go-libstoracha/blobindex"
 )
 
 var (
@@ -239,29 +239,27 @@ func uploadDirectoryWithAuth(sourcePath, email, privateKeyPath, proofPath, space
 	}
 
 	// Build CAR from directory
-	carData, rootLink, shardLinks, fileCount, totalSize, err := CreateCar(sourcePath)
+	carData, _, shardLinks, positions ,fileCount, totalSize, err := CreateCar(sourcePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to create CAR: %v", err)
 	}
-    
-	// save as file for debug
-	if debug {
-		debugCarPath := path.Join(os.TempDir(), "storacha-upload.car")
-		err := os.WriteFile(debugCarPath, carData, 0644)
-		if err != nil {
-			log.Printf("Failed to write debug CAR file: %v", err)
-		} else {
-			log.Printf("Debug CAR file written to: %s", debugCarPath)
-		}
-	}
-	rL := cidlink.Link{Cid: cid.MustParse(rootLink)}
+
+	// Note: deliberately not writing a debug CAR file to user's visible filesystem.
+	// CAR bytes are kept in memory (carData) and uploaded directly.
+
 	shardLinksCid := make([]ipld.Link, len(shardLinks))
 	for i, link := range shardLinks {
 		shardLinksCid[i] = cidlink.Link{Cid: cid.MustParse(link)}
 	}
 
+	muh, _, err := cl.SpaceBlobAdd(ctx, bytes.NewReader(carData), spaceDid)
+	if err != nil {
+		return "", fmt.Errorf("SpaceBlobAdd failed: %v", err)
+	}
+	blobCID := cid.NewCidV1(cid.Raw, muh)
+
 	// Upload to Storacha (pass CAR payload and links)
-	addResult, err := cl.UploadAdd(ctx, spaceDid, rL, shardLinksCid)
+	addResult, err := cl.UploadAdd(ctx, spaceDid, cidlink.Link{Cid: blobCID}, shardLinksCid)
 	if err != nil {
 		if debug {
 			log.Printf("Upload failed: %v", err)
@@ -276,85 +274,169 @@ func uploadDirectoryWithAuth(sourcePath, email, privateKeyPath, proofPath, space
 		log.Printf("Uploaded %d files (%d bytes)", fileCount, totalSize)
 	}
 
+linkCID, ok := addResult.Root.(cidlink.Link)
+if !ok {
+    return "", fmt.Errorf("upload returned non-CID root link: %T", addResult.Root)
+}
+rootCID := linkCID.Cid
+
+// Parse shard CID (CreateCar returned strings)
+shardCID := cid.MustParse(shardLinks[0]) // single shard case
+
+// Build index using the correct types
+indexCAR, err := buildIndexCAR(rootCID, shardCID, positions)
+if err != nil {
+    return "", fmt.Errorf("buildIndexCAR failed: %v", err)
+}
+
+// Upload index blob
+idxMh, _, err := cl.SpaceBlobAdd(ctx, bytes.NewReader(indexCAR), spaceDid)
+if err != nil {
+    return "", fmt.Errorf("index SpaceBlobAdd failed: %v", err)
+}
+
+// Index CID must be CAR codec 0x202
+indexCID := cid.NewCidV1(uint64(multicodec.Car), idxMh)
+indexLink := cidlink.Link{Cid: indexCID}
+
+// Register index
+if err := cl.SpaceIndexAdd(ctx, indexLink, spaceDid); err != nil {
+    return "", fmt.Errorf("SpaceIndexAdd failed: %v", err)
+}
+
+if debug {
+    log.Printf("✓ Index uploaded and registered: %s", indexCID)
+}
+
+
 	return addResult.Root.String(), nil
 }
 
-// (old stub removed)
+type BlockPosition struct {
+    BlockCID string
+    ShardCID string
+    Offset   uint64
+    Length   uint64
+}
 
 // CreateCar builds a CAR file from the provided sourcePath directory.
 // Returns: car bytes, root link (cid string), shardLinks (slice of cid strings), fileCount, totalBytes, error
-func CreateCar(sourcePath string) ([]byte, string, []string, int, int64, error) {
-	if sourcePath == "" {
-		return nil, "", nil, 0, 0, fmt.Errorf("sourcePath required")
-	}
+func CreateCar(sourcePath string) (
+    carBytes []byte,
+    rootLink string,
+    shardLinks []string,
+    positions []BlockPosition,
+    fileCount int,
+    totalSize int64,
+    err error,
+) {
+    if sourcePath == "" {
+        return nil, "", nil, nil, 0, 0, fmt.Errorf("sourcePath required")
+    }
 
-	// We'll use a temporary ReadWrite blockstore backed by the in-memory CAR writer
-	// The blockstore OpenReadWrite requires a path; use an in-memory variant by using blockstore.NewReadWrite? Use the CAR library to write directly.
-	// Use blockstore.OpenReadWrite to create a ReadWrite that writes to a file path. To avoid files, write to a temp file then read it back.
-	tmpFile, err := os.CreateTemp("", "storacha-*.car")
-	if err != nil {
-		return nil, "", nil, 0, 0, fmt.Errorf("failed to create temp file: %v", err)
-	}
-	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpPath)
+    ctx := context.Background()
 
-	// make a fake proxy root to initialize the car
-	hasher, err := multihash.GetHasher(multihash.SHA2_256)
-	if err != nil {
-		return nil, "", nil, 0, 0, err
-	}
-	digest := hasher.Sum([]byte{})
-	hash, err := multihash.Encode(digest, multihash.SHA2_256)
-	if err != nil {
-		return nil, "", nil, 0, 0, err
-	}
-	proxyRoot := cid.NewCidV1(uint64(multicodec.DagPb), hash)
+    // capture blocks written by unixfs
+    blocksMap := make(map[cid.Cid][]byte)
 
-	options := []car.Option{blockstore.WriteAsCarV1(true)}
-	rdw, err := blockstore.OpenReadWrite(tmpPath, []cid.Cid{proxyRoot}, options...)
-	if err != nil {
-		return nil, "", nil, 0, 0, fmt.Errorf("open readwrite car failed: %v", err)
-	}
+    ls := cidlink.DefaultLinkSystem()
+    ls.TrustedStorage = true
 
-	// Build unixfs files into the blockstore and get root CID
-	rootCid, err := writeFiles(context.Background(), false, rdw, sourcePath)
-	if err != nil {
-		return nil, "", nil, 0, 0, fmt.Errorf("writing files into blockstore failed: %v", err)
-	}
+    ls.StorageWriteOpener = func(_ ipld.LinkContext) (io.Writer, ipld.BlockWriteCommitter, error) {
+        var buf bytes.Buffer
+        return &buf, func(lnk ipld.Link) error {
+            c := lnk.(cidlink.Link).Cid
+            blocksMap[c] = append([]byte(nil), buf.Bytes()...)
+            return nil
+        }, nil
+    }
 
-	if err := rdw.Finalize(); err != nil {
-		return nil, "", nil, 0, 0, fmt.Errorf("finalize car failed: %v", err)
-	}
+    ls.StorageReadOpener = func(_ ipld.LinkContext, l ipld.Link) (io.Reader, error) {
+        c := l.(cidlink.Link).Cid
+        b, ok := blocksMap[c]
+        if !ok {
+            return nil, fmt.Errorf("missing block %s", c)
+        }
+        return bytes.NewReader(b), nil
+    }
 
-	// read CAR bytes from temp file
-	data, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return nil, "", nil, 0, 0, fmt.Errorf("reading car file failed: %v", err)
-	}
+    // build unixfs DAG
+    unixfsRoot, _, err := builder.BuildUnixFSRecursive(sourcePath, &ls)
+    if err != nil {
+        return nil, "", nil, nil, 0, 0, fmt.Errorf("unixfs build failed: %v", err)
+    }
+    rootCid := unixfsRoot.(cidlink.Link).Cid
 
-	// For now, shardLinks is empty - guppy UploadAdd should be able to accept full CAR and root
-	shardLinks := []string{}
+    // create temp car file
+    tmpFile, err := os.CreateTemp("", "storacha-*.car")
+    if err != nil {
+        return nil, "", nil, nil, 0, 0, err
+    }
+    tmpPath := tmpFile.Name()
+    tmpFile.Close()
+    defer os.Remove(tmpPath)
 
-	// Count files and total size (walk)
-	var fileCount int
-	var totalSize int64
-	err = filepath.Walk(sourcePath, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			fileCount++
-			totalSize += info.Size()
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, "", nil, 0, 0, err
-	}
+    // open blockstore
+    rw, err := blockstore.OpenReadWrite(tmpPath, []cid.Cid{rootCid}, []car.Option{blockstore.WriteAsCarV1(true)}...)
+    if err != nil {
+        return nil, "", nil, nil, 0, 0, err
+    }
 
-	return data, rootCid.String(), shardLinks, fileCount, totalSize, nil
+    // open file to track offsets
+    f, _ := os.OpenFile(tmpPath, os.O_RDWR|os.O_APPEND, 0644)
+
+    for c, data := range blocksMap {
+        off, _ := f.Seek(0, io.SeekEnd)
+
+        blk, _ := blocks.NewBlockWithCid(data, c)
+        if err := rw.Put(ctx, blk); err != nil {
+            return nil, "", nil, nil, 0, 0, err
+        }
+
+        // append position
+        positions = append(positions, BlockPosition{
+            BlockCID: c.String(),
+            Offset:   uint64(off),
+            Length:   uint64(len(data)),
+        })
+    }
+    f.Close()
+
+    // finalize CAR
+    if err := rw.Finalize(); err != nil {
+        return nil, "", nil, nil, 0, 0, err
+    }
+
+    // read car
+    carBytes, err = os.ReadFile(tmpPath)
+    if err != nil {
+        return nil, "", nil, nil, 0, 0, err
+    }
+
+    // compute shard CID (CAR codec 0x202)
+    hash := sha256.Sum256(carBytes)
+    mhBytes, _ := multihash.Encode(hash[:], multihash.SHA2_256)
+    shardCID := cid.NewCidV1(uint64(multicodec.Car), mhBytes).String()
+
+    // fill shardcid
+    for i := range positions {
+        positions[i].ShardCID = shardCID
+    }
+
+    shardLinks = []string{shardCID}
+
+    // count files & size
+    filepath.Walk(sourcePath, func(p string, info os.FileInfo, err error) error {
+        if !info.IsDir() {
+            fileCount++
+            totalSize += info.Size()
+        }
+        return nil
+    })
+
+    return carBytes, rootCid.String(), shardLinks, positions, fileCount, totalSize, nil
 }
+
 
 func writeFiles(ctx context.Context, noWrap bool, bs *blockstore.ReadWrite, paths ...string) (cid.Cid, error) {
 	ls := cidlink.DefaultLinkSystem()
@@ -408,7 +490,6 @@ func writeFiles(ctx context.Context, noWrap bool, bs *blockstore.ReadWrite, path
 	}
 
 	// make a directory for the file(s).
-
 	root, _, err := builder.BuildUnixFSDirectory(topLevel, &ls)
 	if err != nil {
 		return cid.Undef, nil
@@ -419,4 +500,49 @@ func writeFiles(ctx context.Context, noWrap bool, bs *blockstore.ReadWrite, path
 	}
 
 	return rcl.Cid, nil
+}
+
+func buildIndexCAR(rootCID cid.Cid, shardCID cid.Cid, positions []BlockPosition) ([]byte, error) {
+    // shard multihash identifies the CAR shard
+    shardMH := shardCID.Hash()
+
+    // 1 shard -> shardCount = 1
+    indexView := blobindex.NewShardedDagIndexView(
+        cidlink.Link{Cid: rootCID},
+        1,
+    )
+
+    // Add all block slices
+    for _, p := range positions {
+        blockCID, err := cid.Parse(p.BlockCID)
+        if err != nil {
+            return nil, fmt.Errorf("invalid block CID %s: %v", p.BlockCID, err)
+        }
+
+        // Build position struct
+        pos := blobindex.Position{
+            Offset: p.Offset,
+            Length: p.Length,
+        }
+
+        // Set slice: shard multihash + block multihash + pos
+        indexView.SetSlice(
+            shardMH,
+            blockCID.Hash(),
+            pos,
+        )
+    }
+
+    // Archive index into CAR
+    reader, err := blobindex.Archive(indexView)
+    if err != nil {
+        return nil, fmt.Errorf("index archive failed: %v", err)
+    }
+
+    var buf bytes.Buffer
+    if _, err := io.Copy(&buf, reader); err != nil {
+        return nil, fmt.Errorf("index copy failed: %v", err)
+    }
+
+    return buf.Bytes(), nil
 }
